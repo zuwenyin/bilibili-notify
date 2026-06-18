@@ -1,0 +1,17 @@
+{
+  "name": "bilibili-notify",
+  "private": true,
+  "scripts": {
+    "dev": "concurrently \"pnpm dev:server\" \"pnpm dev:client\"",
+    "dev:server": "pnpm --filter bilibili-notify-server dev",
+    "dev:client": "pnpm --filter bilibili-notify-client dev",
+    "test": "pnpm --filter bilibili-notify-server test",
+    "build": "pnpm --filter bilibili-notify-client build"
+  },
+  "devDependencies": {
+    "concurrently": "^8.2.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
