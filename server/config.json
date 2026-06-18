@@ -1,0 +1,14 @@
+{
+  "proxy": {
+    "enabled": false,
+    "host": "",
+    "port": 0,
+    "username": "",
+    "password": "",
+    "protocol": "http"
+  },
+  "bilibili": {
+    "requestInterval": 2000,
+    "maxRetries": 3
+  }
+}

@@ -1,10 +1,5 @@
 import axios from 'axios';
-
-const DEFAULT_HEADERS = {
-  'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-  'Referer': 'https://www.bilibili.com',
-  'Origin': 'https://www.bilibili.com'
-};
+import crypto from 'crypto';
 
 export interface VideoInfo {
   bvid: string;
@@ -47,15 +42,49 @@ const QUALITY_MAP: Record<number, string> = {
   127: '杜比全景声'
 };
 
-export async function getVideoInfo(bvid: string, cookie?: string): Promise<VideoInfo> {
-  const headers: Record<string, string> = { ...DEFAULT_HEADERS };
+function generateBuvid3(): string {
+  const arr = new Uint8Array(16);
+  crypto.randomFillSync(arr);
+  return Array.from(arr, b => b.toString(16).padStart(2, '0')).join('');
+}
+
+function getTimestamp(): number {
+  return Math.floor(Date.now() / 1000);
+}
+
+function buildFullHeaders(cookie?: string): Record<string, string> {
+  const buvid3 = generateBuvid3();
+  const buvid4 = generateBuvid3();
+  const timestamp = getTimestamp();
+  
+  let cookieStr = `buvid3=${buvid3}; buvid4=${buvid4}; b_nut=${timestamp}; b_lsid=${generateBuvid3().substring(0, 8)}_${timestamp}`;
+  
   if (cookie) {
-    headers.Cookie = cookie;
+    cookieStr += '; ' + cookie;
   }
+
+  return {
+    'Host': 'api.bilibili.com',
+    'Connection': 'keep-alive',
+    'sec-ch-ua': '"Google Chrome";v="131", "Chromium";v="131", "Not_A Brand";v="24"',
+    'sec-ch-ua-mobile': '?0',
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+    'Accept': 'application/json, text/plain, */*',
+    'Sec-Ch-Ua-Platform': '"Windows"',
+    'Origin': 'https://www.bilibili.com',
+    'Referer': 'https://www.bilibili.com/',
+    'Accept-Language': 'zh-CN,zh;q=0.9',
+    'Cookie': cookieStr
+  };
+}
+
+export async function getVideoInfo(bvid: string, cookie?: string): Promise<VideoInfo> {
+  const headers = buildFullHeaders(cookie);
 
   const response = await axios.get('https://api.bilibili.com/x/web-interface/view', {
     params: { bvid },
-    headers
+    headers,
+    timeout: 10000
   });
 
   if (response.data.code !== 0) {
@@ -79,30 +108,31 @@ export async function getVideoInfo(bvid: string, cookie?: string): Promise<Video
 }
 
 export async function getAvailableQualities(bvid: string, cid: number, cookie?: string): Promise<PlayQuality[]> {
-  const headers: Record<string, string> = { ...DEFAULT_HEADERS };
-  if (cookie) {
-    headers.Cookie = cookie;
-  }
+  const headers = buildFullHeaders(cookie);
 
   const response = await axios.get('https://api.bilibili.com/x/player/playurl', {
     params: {
       bvid,
       cid,
       fnval: 16,
-      wts: Math.floor(Date.now() / 1000)
+      wts: getTimestamp()
     },
-    headers
+    headers,
+    timeout: 10000
   });
+
+  if (response.data.code === -412) {
+    throw new Error('请求被B站限制，请稍后再试');
+  }
 
   if (response.data.code !== 0) {
     throw new Error(`获取清晰度失败: ${response.data.message}`);
   }
 
   const acceptQuality = response.data.data?.accept_quality || [];
-
-  const qualities: PlayQuality[] = [];
   const availableQns = new Set(acceptQuality);
 
+  const qualities: PlayQuality[] = [];
   for (const [qn, label] of Object.entries(QUALITY_MAP)) {
     const qnNum = parseInt(qn);
     qualities.push({
@@ -116,10 +146,7 @@ export async function getAvailableQualities(bvid: string, cid: number, cookie?: 
 }
 
 export async function getPlayUrl(bvid: string, cid: number, qn: number, cookie?: string): Promise<PlayUrl> {
-  const headers: Record<string, string> = { ...DEFAULT_HEADERS };
-  if (cookie) {
-    headers.Cookie = cookie;
-  }
+  const headers = buildFullHeaders(cookie);
 
   console.log('[VideoDownload] Getting play url for bvid:', bvid, 'cid:', cid, 'qn:', qn);
 
@@ -130,12 +157,17 @@ export async function getPlayUrl(bvid: string, cid: number, qn: number, cookie?:
       qn,
       fnval: 1,
       fourk: 1,
-      wts: Math.floor(Date.now() / 1000)
+      wts: getTimestamp()
     },
-    headers
+    headers,
+    timeout: 10000
   });
 
   console.log('[VideoDownload] Response code:', response.data.code, 'message:', response.data.message);
+
+  if (response.data.code === -412) {
+    throw new Error('请求被B站限制，请稍后再试');
+  }
 
   if (response.data.code !== 0) {
     throw new Error(`获取播放地址失败: ${response.data.message}`);

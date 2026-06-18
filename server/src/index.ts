@@ -11,6 +11,7 @@ import statsDashboardRouter from './routes/stats-dashboard';
 import videosRouter from './routes/videos';
 import schedulerRouter from './routes/scheduler';
 import videoDownloadRouter from './routes/video-download';
+import proxyRouter from './routes/proxy';
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -31,6 +32,7 @@ async function bootstrap() {
   app.use('/api/videos', videosRouter);
   app.use('/api/scheduler', schedulerRouter);
   app.use('/api/video-download', videoDownloadRouter);
+  app.use('/api/proxy', proxyRouter);
 
   app.get('/api/health', (req, res) => {
     res.json({ status: 'ok', timestamp: new Date().toISOString() });

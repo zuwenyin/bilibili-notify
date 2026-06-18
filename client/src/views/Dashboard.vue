@@ -99,7 +99,7 @@
               v-model="searchKeyword"
               placeholder="搜索标题"
               clearable
-              style="width: 180px"
+              style="width: 160px"
               @clear="fetchRecentVideos"
               @keyup.enter="fetchRecentVideos"
             >
@@ -107,7 +107,7 @@
                 <el-icon><Search /></el-icon>
               </template>
             </el-input>
-            <el-select v-model="filterUpMid" placeholder="全部UP主" clearable style="width: 150px" @change="fetchRecentVideos">
+            <el-select v-model="filterUpMid" placeholder="全部UP主" clearable style="width: 130px" @change="fetchRecentVideos">
               <el-option
                 v-for="sub in subscriptions"
                 :key="sub.up_mid"
@@ -115,7 +115,21 @@
                 :value="sub.up_mid"
               />
             </el-select>
+            <el-date-picker
+              v-model="dateRange"
+              type="daterange"
+              range-separator="至"
+              start-placeholder="开始日期"
+              end-placeholder="结束日期"
+              value-format="YYYY-MM-DD"
+              :unlink-panels="true"
+              style="width: 260px"
+              @change="fetchRecentVideos"
+            />
             <el-button :icon="Refresh" circle @click="fetchRecentVideos" :loading="refreshing" />
+            <el-button @click="fetchHistory" :loading="fetchingHistory" type="warning" size="small">
+              {{ fetchingHistory ? '拉取中...' : '拉取历史' }}
+            </el-button>
           </div>
         </div>
       </template>
@@ -163,7 +177,7 @@
       </div>
     </el-card>
 
-    <el-dialog v-model="showDownloadDialog" title="下载视频" width="400px" :close-on-click-modal="false" :close-on-press-escape="false" :show-close="!downloading">
+    <el-dialog v-model="showDownloadDialog" title="下载视频" width="400px" :close-on-click-modal="false" :close-on-press-escape="false" :show-close="false">
       <div class="download-content">
         <p class="download-title">{{ downloadTitle }}</p>
         <el-progress
@@ -175,7 +189,16 @@
         <p class="download-tip">{{ downloadTip }}</p>
       </div>
       <template #footer>
-        <el-button v-if="!downloading" @click="showDownloadDialog = false">关闭</el-button>
+        <div class="download-actions">
+          <template v-if="downloading">
+            <el-button v-if="!paused" @click="pauseDownload" :icon="VideoPause">暂停</el-button>
+            <el-button v-else type="primary" @click="resumeDownload" :icon="VideoPlay">继续</el-button>
+            <el-button type="danger" @click="cancelDownload" :icon="CloseBold">取消</el-button>
+          </template>
+          <template v-else>
+            <el-button @click="closeDownloadDialog">关闭</el-button>
+          </template>
+        </div>
       </template>
     </el-dialog>
 
@@ -205,7 +228,7 @@
 import { ref, onMounted } from 'vue'
 import api from '../api'
 import { ElMessage } from 'element-plus'
-import { Refresh, Search, Download } from '@element-plus/icons-vue'
+import { Refresh, Search, Download, VideoPause, VideoPlay, CloseBold } from '@element-plus/icons-vue'
 
 const subscriptions = ref<any[]>([])
 const recentVideos = ref<any[]>([])
@@ -222,8 +245,10 @@ const pageSize = ref(10)
 const total = ref(0)
 const searchKeyword = ref('')
 const filterUpMid = ref('')
+const dateRange = ref<[string, string] | null>(null)
 const showDownloadDialog = ref(false)
 const downloading = ref(false)
+const paused = ref(false)
 const downloadProgress = ref(0)
 const downloadStatus = ref<'success' | 'exception' | ''>('')
 const downloadTitle = ref('')
@@ -233,6 +258,9 @@ const loadingQualities = ref(false)
 const availableQualities = ref<{ qn: number; label: string }[]>([])
 const currentDownloadBvid = ref('')
 const currentDownloadTitle = ref('')
+const fetchingHistory = ref(false)
+let currentXHR: XMLHttpRequest | null = null
+let totalBytes = 0
 
 const formatDate = (date: string) => {
   return new Date(date).toLocaleString('zh-CN')
@@ -299,6 +327,10 @@ const fetchRecentVideos = async () => {
     if (filterUpMid.value) {
       params.up_mid = filterUpMid.value
     }
+    if (dateRange.value) {
+      params.start_date = dateRange.value[0]
+      params.end_date = dateRange.value[1]
+    }
     const videosRes = await api.get('/videos/updates', { params })
     recentVideos.value = videosRes.data.videos
     total.value = videosRes.data.total
@@ -306,6 +338,33 @@ const fetchRecentVideos = async () => {
     console.error('Failed to fetch videos:', error)
   } finally {
     refreshing.value = false
+  }
+}
+
+const fetchHistory = async () => {
+  if (!filterUpMid.value) {
+    ElMessage.warning('请先选择一个UP主')
+    return
+  }
+
+  fetchingHistory.value = true
+  try {
+    const response = await api.post(`/videos/fetch-history/${filterUpMid.value}`)
+    if (response.data.fetched > 0) {
+      ElMessage.success(response.data.message)
+      await fetchRecentVideos()
+    } else {
+      ElMessage.info(response.data.message)
+    }
+  } catch (error: any) {
+    const msg = error.response?.data?.error || '拉取失败'
+    if (msg.includes('412') || msg.includes('频繁') || msg.includes('限制')) {
+      ElMessage.warning('B站API限制，请稍后再试')
+    } else {
+      ElMessage.error(msg)
+    }
+  } finally {
+    fetchingHistory.value = false
   }
 }
 
@@ -369,7 +428,12 @@ const showQualityDialog = async (video: any) => {
       label: qnToLabel[q.qn] || `${q.qn}P`
     }))
   } catch (error: any) {
-    ElMessage.error(error.response?.data?.error || '获取清晰度失败')
+    const errorMsg = error.response?.data?.error || '获取清晰度失败'
+    if (errorMsg.includes('限制') || errorMsg.includes('412')) {
+      ElMessage.warning('B站API限制，请更新Cookie后重试')
+    } else {
+      ElMessage.error(errorMsg)
+    }
     showQualitySelectDialog.value = false
   } finally {
     loadingQualities.value = false
@@ -384,75 +448,118 @@ const startDownload = (bvid: string, qn: number) => {
 const downloadVideo = async (bvid: string, qn: number) => {
   showDownloadDialog.value = true
   downloading.value = true
+  paused.value = false
   downloadProgress.value = 0
   downloadStatus.value = ''
-  downloadTitle.value = currentDownloadTitle.value || '正在下载视频...'
+  downloadTitle.value = currentDownloadTitle.value || '正在下载...'
   downloadTip.value = '请稍候...'
 
-  try {
-    const token = localStorage.getItem('token')
-    const url = `/api/video-download/stream/${bvid}?qn=${qn}`
+  const token = localStorage.getItem('token')
+  const url = `/api/video-download/stream/${bvid}?qn=${qn}`
 
-    const xhr = new XMLHttpRequest()
-    xhr.open('GET', url, true)
-    xhr.setRequestHeader('Authorization', `Bearer ${token}`)
-    xhr.responseType = 'blob'
+  const xhr = new XMLHttpRequest()
+  currentXHR = xhr
+  xhr.open('GET', url, true)
+  xhr.setRequestHeader('Authorization', `Bearer ${token}`)
+  xhr.responseType = 'blob'
 
-    xhr.onprogress = (event) => {
-      if (event.lengthComputable) {
-        downloadProgress.value = Math.round((event.loaded / event.total) * 100)
-        const loadedMB = (event.loaded / 1024 / 1024).toFixed(1)
-        const totalMB = (event.total / 1024 / 1024).toFixed(1)
-        downloadTip.value = `已下载 ${loadedMB}MB / ${totalMB}MB`
-      }
+  xhr.onprogress = (event) => {
+    if (event.lengthComputable) {
+      totalBytes = event.total
+      const progress = Math.round((event.loaded / totalBytes) * 100)
+      downloadProgress.value = progress
+      const loadedMB = (event.loaded / 1024 / 1024).toFixed(1)
+      const totalMB = (totalBytes / 1024 / 1024).toFixed(1)
+      downloadTip.value = `已下载 ${loadedMB}MB / ${totalMB}MB`
     }
+  }
 
-    xhr.onload = () => {
-      if (xhr.status === 200) {
-        downloadProgress.value = 100
-        downloadStatus.value = 'success'
-        downloadTitle.value = '下载完成'
-        downloadTip.value = '文件已保存'
+  xhr.onload = () => {
+    if (xhr.status === 200) {
+      downloadProgress.value = 100
+      downloadStatus.value = 'success'
+      downloadTitle.value = '下载完成'
+      downloadTip.value = '文件已保存'
 
-        const blob = xhr.response
-        const contentDisposition = xhr.getResponseHeader('content-disposition')
-        let filename = 'video.mp4'
-        if (contentDisposition) {
-          const match = contentDisposition.match(/filename[^;=\n]*=((['"]).*?\2|[^;\n]*)/)
-          if (match) {
-            filename = decodeURIComponent(match[1].replace(/['"]/g, ''))
-          }
+      const blob = xhr.response
+      const contentDisposition = xhr.getResponseHeader('content-disposition')
+      let filename = 'video.mp4'
+      if (contentDisposition) {
+        const match = contentDisposition.match(/filename[^;=\n]*=((['"]).*?\2|[^;\n]*)/)
+        if (match) {
+          filename = decodeURIComponent(match[1].replace(/['"]/g, ''))
         }
-
-        const link = document.createElement('a')
-        link.href = URL.createObjectURL(blob)
-        link.download = filename
-        document.body.appendChild(link)
-        link.click()
-        document.body.removeChild(link)
-        URL.revokeObjectURL(link.href)
-      } else {
-        downloadStatus.value = 'exception'
-        downloadTitle.value = '下载失败'
-        downloadTip.value = `错误: ${xhr.status}`
       }
-      downloading.value = false
-    }
 
-    xhr.onerror = () => {
+      const link = document.createElement('a')
+      link.href = URL.createObjectURL(blob)
+      link.download = filename
+      document.body.appendChild(link)
+      link.click()
+      document.body.removeChild(link)
+      URL.revokeObjectURL(link.href)
+    } else {
       downloadStatus.value = 'exception'
       downloadTitle.value = '下载失败'
-      downloadTip.value = '网络错误'
-      downloading.value = false
+      downloadTip.value = `错误: ${xhr.status}`
     }
+    downloading.value = false
+    currentXHR = null
+  }
 
-    xhr.send()
-  } catch (error: any) {
+  xhr.onerror = () => {
     downloadStatus.value = 'exception'
     downloadTitle.value = '下载失败'
-    downloadTip.value = error.message || '未知错误'
+    downloadTip.value = '网络错误'
     downloading.value = false
+    currentXHR = null
   }
+
+  xhr.send()
+}
+
+const pauseDownload = () => {
+  if (currentXHR) {
+    currentXHR.abort()
+    paused.value = true
+    downloading.value = false
+    downloadTip.value = `下载已暂停 (${downloadProgress.value}%)`
+  }
+}
+
+const resumeDownload = () => {
+  if (paused.value && currentDownloadBvid.value) {
+    paused.value = false
+    downloading.value = true
+    downloadStatus.value = ''
+    downloadTip.value = '正在继续下载...'
+    downloadVideo(currentDownloadBvid.value, 80)
+  }
+}
+
+const cancelDownload = () => {
+  if (currentXHR) {
+    currentXHR.abort()
+    currentXHR = null
+  }
+  downloading.value = false
+  paused.value = false
+  downloadProgress.value = 0
+  downloadStatus.value = 'exception'
+  downloadTitle.value = '下载已取消'
+  downloadTip.value = '已释放下载资源'
+}
+
+const closeDownloadDialog = () => {
+  if (downloading.value && currentXHR) {
+    currentXHR.abort()
+    currentXHR = null
+  }
+  showDownloadDialog.value = false
+  downloading.value = false
+  paused.value = false
+  downloadProgress.value = 0
+  downloadStatus.value = ''
 }
 </script>
 
@@ -659,6 +766,12 @@ const downloadVideo = async (bvid: string, qn: number) => {
   margin-top: 1rem;
   color: #909399;
   font-size: 13px;
+}
+
+.download-actions {
+  display: flex;
+  justify-content: center;
+  gap: 12px;
 }
 
 .quality-list {

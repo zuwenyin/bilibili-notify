@@ -1,5 +1,6 @@
 import axios from 'axios';
 import crypto from 'crypto';
+import { createAxiosInstance } from './proxy';
 
 export interface UserInfo {
   mid: string;
@@ -81,27 +82,24 @@ export function encWbi(params: Record<string, any>, imgKey: string, subKey: stri
   return { ...filtered, w_rid };
 }
 
-export function clearWbiKeysCache(): void {
-  wbiKeys = null;
-  wbiKeysExpiry = 0;
-}
-
 export async function getWbiKeys(cookie?: string): Promise<{ img_key: string; sub_key: string }> {
+  if (wbiKeys && Date.now() < wbiKeysExpiry) {
+    return wbiKeys;
+  }
+
   const headers: Record<string, string> = {
-    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
     'Referer': 'https://www.bilibili.com'
   };
   if (cookie) {
     headers.Cookie = cookie;
   }
 
-  console.log('[WBI] Fetching fresh keys...');
-  const response = await axios.get('https://api.bilibili.com/x/web-interface/nav', { headers });
-  console.log('[WBI] Nav response code:', response.data.code);
+  const http = createAxiosInstance(headers);
+  const response = await http.get('https://api.bilibili.com/x/web-interface/nav');
   
   const wbiImg = response.data.data?.wbi_img;
   if (!wbiImg) {
-    console.error('[WBI] No wbi_img in response');
     throw new Error('Failed to get WBI keys');
   }
 
@@ -110,11 +108,24 @@ export async function getWbiKeys(cookie?: string): Promise<{ img_key: string; su
   const img_key = imgUrl.split('/').pop()!.split('.')[0];
   const sub_key = subUrl.split('/').pop()!.split('.')[0];
 
-  console.log('[WBI] Got fresh keys');
   wbiKeys = { img_key, sub_key };
   wbiKeysExpiry = Date.now() + 5 * 60 * 1000;
 
   return wbiKeys;
+}
+
+export async function getWbiKeysWithRetry(cookie?: string, retries = 2): Promise<{ img_key: string; sub_key: string }> {
+  for (let i = 0; i <= retries; i++) {
+    try {
+      wbiKeys = null;
+      wbiKeysExpiry = 0;
+      return await getWbiKeys(cookie);
+    } catch (error) {
+      if (i === retries) throw error;
+      await new Promise(resolve => setTimeout(resolve, 500));
+    }
+  }
+  throw new Error('Failed to get WBI keys');
 }
 
 export async function getUserInfo(mid: string): Promise<UserInfo> {
@@ -232,23 +243,28 @@ export async function getFollows(mid: string, cookie?: string, pn: number = 1, p
   };
 }
 
-export async function getLatestVideos(mid: string, cookie?: string): Promise<VideoInfo[]> {
-  const headers: Record<string, string> = { ...DEFAULT_HEADERS };
+export async function getLatestVideos(mid: string, cookie?: string, page: number = 1, pageSize: number = 30): Promise<VideoInfo[]> {
+  const headers: Record<string, string> = {
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+    'Referer': 'https://www.bilibili.com'
+  };
   if (cookie) {
     headers.Cookie = cookie;
-    headers.Referer = 'https://www.bilibili.com';
   }
 
-  const { img_key, sub_key } = await getWbiKeys(cookie);
-  const signedParams = encWbi({ mid, pn: 1, ps: 10, order: 'pubdate' }, img_key, sub_key);
+  const { img_key, sub_key } = await getWbiKeysWithRetry(cookie);
+  const signedParams = encWbi({ mid, pn: page, ps: pageSize, order: 'pubdate' }, img_key, sub_key);
 
-  console.log(`[Bilibili] getLatestVideos mid=${mid}, cookie: ${cookie ? 'present' : 'missing'}`);
-  const response = await axios.get(BILIBILI_API.spaceArcs, {
-    params: signedParams,
-    headers
+  const http = createAxiosInstance(headers);
+  const response = await http.get(BILIBILI_API.spaceArcs, {
+    params: signedParams
   });
 
-  console.log(`[Bilibili] spaceArcs response code=${response.data.code}, message=${response.data.message}`);
+  if (response.data.code === -412) {
+    wbiKeys = null;
+    wbiKeysExpiry = 0;
+    throw new Error('请求被限制，请稍后重试');
+  }
 
   if (response.data.code !== 0) {
     throw new Error(`Bilibili API error: ${response.data.message}`);

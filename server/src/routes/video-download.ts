@@ -19,6 +19,7 @@ router.get('/info/:bvid', async (req: AuthRequest, res: Response) => {
 
     res.json({ ...videoInfo, qualities });
   } catch (error: any) {
+    console.error('[VideoInfo] Error:', error.message);
     res.status(500).json({ error: error.message || '获取视频信息失败' });
   }
 });
@@ -38,6 +39,7 @@ router.get('/play-url/:bvid', async (req: AuthRequest, res: Response) => {
       ...playUrl
     });
   } catch (error: any) {
+    console.error('[PlayUrl] Error:', error.message);
     res.status(500).json({ error: error.message || '获取播放地址失败' });
   }
 });
@@ -52,16 +54,19 @@ router.get('/stream/:bvid', async (req: AuthRequest, res: Response) => {
     const videoInfo = await getVideoInfo(bvid, cookie);
     const playUrl = await getPlayUrl(bvid, videoInfo.cid, qn, cookie);
 
+    console.log('[VideoStream] Proxying download for:', videoInfo.title);
+
     const response = await axios({
       method: 'get',
       url: playUrl.url,
       responseType: 'stream',
       headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        'Referer': 'https://www.bilibili.com',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+        'Referer': 'https://www.bilibili.com/',
         'Origin': 'https://www.bilibili.com'
       },
-      maxRedirects: 5
+      maxRedirects: 10,
+      timeout: 600000
     });
 
     const contentType = (response.headers['content-type'] as string) || 'video/mp4';
@@ -72,6 +77,7 @@ router.get('/stream/:bvid', async (req: AuthRequest, res: Response) => {
       res.setHeader('Content-Length', String(contentLength));
     }
     res.setHeader('Accept-Ranges', 'bytes');
+    res.setHeader('Cache-Control', 'no-cache');
 
     const safeTitle = videoInfo.title.replace(/[^\w\u4e00-\u9fa5]/g, '_').substring(0, 50);
     res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(safeTitle)}.mp4"`);
